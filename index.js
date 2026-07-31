@@ -22,22 +22,22 @@ app.get("/health", (req, res) => {
   res.json({ status: "ok" });
 });
 
-// GET all tasks — now reads from SQLite
-app.get("/tasks", (req, res) => {
-  const tasks = db.prepare("SELECT * FROM tasks").all();
-  res.json(tasks);
+// GET all tasks — now reads from Postgres
+app.get("/tasks", async (req, res) => {
+  const { rows } = await pool.query("SELECT * FROM tasks");
+  res.json(rows);
 });
 
-// GET a single task by id, reads from SQLite
-app.get("/tasks/:id", (req, res) => {
+// GET a single task by id — now reads from Postgres
+app.get("/tasks/:id", async (req, res) => {
   const id = parseInt(req.params.id);
-  const task = db.prepare("SELECT * FROM tasks WHERE id = ?").get(id);
+  const { rows } = await pool.query("SELECT * FROM tasks WHERE id = $1", [id]);
 
-  if (!task) {
+  if (rows.length === 0) {
     return res.status(404).json({ error: "Task not found" });
   }
 
-  res.json(task);
+  res.json(rows[0]);
 });
 
 // CREATE a new task — now inserts into SQLite
