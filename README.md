@@ -1,36 +1,46 @@
 # Task API
 
-A simple CRUD API for managing a to-do list, built with Node.js and Express, backed by a SQLite database.
+A CRUD API for managing a to-do list, built with Node.js and Express, backed by a containerized PostgreSQL database.
 
 ## What this is
 
-This API lets you create, read, update, and delete tasks. Data is stored persistently in a SQLite
-database (`tasks.db`) — it survives server restarts, unlike the in-memory version from the previous
-version of this project.
+This API lets you create, read, update, and delete tasks. Data is stored in PostgreSQL, running in a
+Docker container alongside the app itself — the whole stack starts with a single command, and data
+survives even a full container restart.
 
-## Why SQLite
+## Storage history
 
-SQLite was chosen because it needs no separate database server — the entire database is a single file
-(`tasks.db`) that gets created automatically the first time the app runs. That makes it perfect for a
-small project like this: zero setup, zero configuration, and the data still survives restarts.
+This project has used three storage engines as it evolved:
+1. In-memory array (Assignment 1) — lost on every restart.
+2. SQLite file (Assignment 2) — survived app restarts, single file on disk.
+3. **PostgreSQL in Docker (this assignment)** — a real database server, running in its own container,
+   with persistent storage via a Docker volume.
 
-## Where the database lives
-
-The database file is `tasks.db`, created automatically in the project root the first time you run the
-server. It's git-ignored, so each fresh clone starts with a brand new, empty database that seeds itself
-with 3 example tasks on first run.
+The API itself never changed across any of these three swaps — only the storage layer underneath it did.
 
 ## How to run it
 
-\`\`\`bash
+```bash
 git clone https://github.com/HussainAli7858/crud-task-api.git
 cd crud-task-api
-npm install
-node --experimental-sqlite index.js
-\`\`\`
+cp .env.example .env
+docker compose up
+```
 
-Server runs at `http://localhost:3000`. The database and its table are created automatically, and 3
-example tasks are seeded on first run only.
+That's it — one command starts both the app and its database. The database table is created automatically,
+and 3 example tasks are seeded on first run only.
+
+Server runs at `http://localhost:3000`.
+
+## Environment variables
+
+See `.env.example` for the required variable:
+
+DATABASE_URL=postgres://postgres:dev@localhost:5432/tasks
+
+
+(Note: inside Docker Compose, the app actually connects to the database using the service name `db`
+instead of `localhost` — this is set automatically in `compose.yaml` and doesn't require any manual change.)
 
 ## Endpoints
 
@@ -46,20 +56,53 @@ example tasks are seeded on first run only.
 
 ## Example request
 
-\`\`\`bash
+```bash
 curl -i -X POST http://localhost:3000/tasks -H "Content-Type: application/json" -d '{"title":"Buy milk"}'
-\`\`\`
+```
 
 Example response:
 
-\`\`\`
 HTTP/1.1 201 Created
 X-Powered-By: Express
 Content-Type: application/json; charset=utf-8
 Content-Length: 40
+ETag: W/"28-gPXr/tBcmKMXZwSEhav9o8e9gYc"
+Date: Fri, 31 Jul 2026 12:27:09 GMT
+Connection: keep-alive
+Keep-Alive: timeout=5
 
-{"id":4,"title":"Buy milk","done":0}
-\`\`\`
+{"id":5,"title":"Buy milk","done":false}
+
+
+## Database
+
+Tasks are stored in PostgreSQL, running in its own Docker container (`db` service in `compose.yaml`),
+with a named volume (`taskdata`) so data survives a full `docker compose down` and `docker compose up`
+cycle.
+
+id |           title            | done
+----+----------------------------+------
+  1 | Buy milk                   | f
+  2 | Walk the dog                | t
+  3 | Finish CRUD API assignment | f
+  5 | Buy milk                   | f
+(4 rows)
+
+
+![Postgres screenshot](postgres-screenshot.png)
+
+### Persistence proof
+
+Tested by creating a task, running `docker compose down` (stopping and removing both containers), then
+`docker compose up` again. The created task was still present in `GET /tasks` afterward — confirming the
+volume preserved the data even though the containers themselves were fully recreated.
+
+### Architecture note
+
+The service and route logic (`index.js`) did not change in shape when moving from SQLite to Postgres —
+only the database queries inside the routes changed (placeholder syntax `?` → `$1`, and the driver
+itself). This is the same principle proven across all three storage swaps in this project: the API is the
+promise, the database is just where that promise is kept.
 
 ## Swagger UI
 
@@ -67,23 +110,7 @@ Interactive API docs available at `http://localhost:3000/docs` once the server i
 
 ![Swagger UI screenshot](swagger-screenshot.png)
 
-## Database
-
-Tasks are stored in a SQLite database (`tasks.db`), queried directly with SQL — every CRUD operation
-(GET, POST, PUT, DELETE) runs a parameterized SQL query against it (`SELECT`, `INSERT`, `UPDATE`,
-`DELETE`), rather than working with an in-memory array.
-
-![Database screenshot](db-screenshot.png)
-
-### Example SQL query
-
-\`\`\`sql
-SELECT COUNT(*) FROM tasks;
-\`\`\`
-
-Ran this in DB Browser for SQLite and got 3, confirming the seed data loaded correctly on a fresh database.
-
 ## Notes
 
-Unlike the in-memory version, data now survives a server restart — this was tested directly by creating
-tasks, restarting the server, and confirming they were still present via `GET /tasks`.
+Running `docker compose down -v` (with the `-v` flag) removes the volume too, which would permanently
+delete all data — useful to know, and dangerous to do by accident.
