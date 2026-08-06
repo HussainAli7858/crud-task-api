@@ -3,6 +3,7 @@ const swaggerUi = require("swagger-ui-express");
 const openapiSpec = require("./openapi.json");
 const db = require("./db.js");
 const { pool, initDb } = require("./db.js");
+const supabase = require("./supabase.js");
 
 const app = express();
 const PORT = 3000;
@@ -101,6 +102,7 @@ app.delete("/tasks/:id", async (req, res) => {
 initDb().then(() => {
   app.listen(PORT, () => {
     console.log(`Server running at http://localhost:${PORT}`);
+    console.log("Server running and connected to Supabase");
   });
 }).catch(err => {
   console.error("Failed to initialize database:", err);
