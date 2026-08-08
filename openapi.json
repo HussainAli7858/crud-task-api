@@ -5,6 +5,15 @@
     "version": "1.0.0",
     "description": "A simple in-memory CRUD API for managing a to-do list."
   },
+  "components": {
+  "securitySchemes": {
+    "bearerAuth": {
+      "type": "http",
+      "scheme": "bearer",
+      "bearerFormat": "JWT"
+    }
+  }
+  },
   "paths": {
     "/tasks": {
       "get": {
@@ -81,6 +90,93 @@
           "404": { "description": "Task not found" }
         }
       }
+    },
+    "/auth/signup": {
+    "post": {
+      "summary": "Create a new user account",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "email": { "type": "string" },
+                "password": { "type": "string" }
+              },
+              "required": ["email", "password"]
+            }
+          }
+        }
+      },
+      "responses": {
+        "201": { "description": "User created" },
+        "400": { "description": "Missing email or password" }
+      }
     }
+  },
+  "/auth/login": {
+    "post": {
+      "summary": "Authenticate and receive a JWT",
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "email": { "type": "string" },
+                "password": { "type": "string" }
+              },
+              "required": ["email", "password"]
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": { "description": "Login successful, returns access_token" },
+        "400": { "description": "Missing email or password" },
+        "401": { "description": "Invalid login credentials" }
+      }
+    }
+  },
+  "/auth/logout": {
+    "post": {
+        "summary": "End the user session",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "204": { "description": "Logged out successfully" },
+          "401": { "description": "Access token required or invalid" }
+        }
+      }
+  },
+  "/public/info": {
+    "get": {
+      "summary": "Public, unprotected info",
+      "responses": {
+        "200": { "description": "Public message" }
+      }
+    }
+  },
+  "/protected/profile": {
+    "get": {
+      "summary": "Get the logged-in user's profile",
+      "security": [{ "bearerAuth": [] }],
+      "responses": {
+        "200": { "description": "User profile data" },
+        "401": { "description": "Access token required or invalid" }
+      }
+    }
+  },
+  "/protected/dashboard": {
+    "get": {
+      "summary": "Protected dashboard (proves middleware reuse)",
+      "security": [{ "bearerAuth": [] }],
+      "responses": {
+        "200": { "description": "Dashboard welcome message" },
+        "401": { "description": "Access token required or invalid" }
+      }
+    }
+  }
   }
 }
