@@ -1,22 +1,19 @@
 # Task API
 
-A CRUD API for managing a to-do list, built with Node.js and Express, backed by a containerized PostgreSQL database.
+A CRUD API for managing a to-do list, built with Node.js and Express, backed by a containerized PostgreSQL database, with authentication powered by Supabase.
 
 ## What this is
 
-This API lets you create, read, update, and delete tasks. Data is stored in PostgreSQL, running in a
-Docker container alongside the app itself — the whole stack starts with a single command, and data
-survives even a full container restart.
+This API lets you create, read, update, and delete tasks, and now includes secure user authentication.
+Users sign up and log in through Supabase (which handles password hashing and token signing), and
+specific routes are protected — only accessible with a valid access token.
 
-## Storage history
+## Project history
 
-This project has used three storage engines as it evolved:
-1. In-memory array (Assignment 1) — lost on every restart.
-2. SQLite file (Assignment 2) — survived app restarts, single file on disk.
-3. **PostgreSQL in Docker (this assignment)** — a real database server, running in its own container,
-   with persistent storage via a Docker volume.
-
-The API itself never changed across any of these three swaps — only the storage layer underneath it did.
+1. In-memory array (Assignment 1)
+2. SQLite file (Assignment 2)
+3. Containerized PostgreSQL (Assignment 3)
+4. **Supabase authentication + protected routes (this assignment)**
 
 ## How to run it
 
@@ -24,93 +21,91 @@ The API itself never changed across any of these three swaps — only the storag
 git clone https://github.com/HussainAli7858/crud-task-api.git
 cd crud-task-api
 cp .env.example .env
-docker compose up
 ```
 
-That's it — one command starts both the app and its database. The database table is created automatically,
-and 3 example tasks are seeded on first run only.
+Then fill in your own Supabase project URL and anon key in `.env` (create a free project at supabase.com if you don't have one), then:
+
+```bash
+docker compose up --build
+```
 
 Server runs at `http://localhost:3000`.
 
 ## Environment variables
 
-See `.env.example` for the required variable:
+See `.env.example`:
 
 DATABASE_URL=postgres://postgres:dev@localhost:5432/tasks
+SUPABASE_URL=your_supabase_project_url
+SUPABASE_KEY=your_supabase_anon_key
 
 
-(Note: inside Docker Compose, the app actually connects to the database using the service name `db`
-instead of `localhost` — this is set automatically in `compose.yaml` and doesn't require any manual change.)
+Never commit your real `.env` — only `.env.example` with placeholder values.
 
 ## Endpoints
 
-| Method | Path         | Description             |
-|--------|--------------|--------------------------|
-| GET    | /            | API info                |
-| GET    | /health      | Health check             |
-| GET    | /tasks       | List all tasks           |
-| GET    | /tasks/:id   | Get a single task        |
-| POST   | /tasks       | Create a new task        |
-| PUT    | /tasks/:id   | Update a task            |
-| DELETE | /tasks/:id   | Delete a task            |
+| Method | Path                  | Description                  | Auth required |
+|--------|-----------------------|-------------------------------|----------------|
+| GET    | /                     | API info                     | No |
+| GET    | /health               | Health check                  | No |
+| GET    | /tasks                | List all tasks                | No |
+| GET    | /tasks/:id            | Get a single task             | No |
+| POST   | /tasks                | Create a new task             | No |
+| PUT    | /tasks/:id            | Update a task                 | No |
+| DELETE | /tasks/:id            | Delete a task                 | No |
+| POST   | /auth/signup          | Create a new user account     | No |
+| POST   | /auth/login           | Authenticate, receive a JWT   | No |
+| POST   | /auth/logout          | End the user session          | **Yes (Bearer)** |
+| GET    | /public/info          | Public, open info              | No |
+| GET    | /protected/profile    | Get logged-in user's profile  | **Yes (Bearer)** |
+| GET    | /protected/dashboard  | Protected dashboard example   | **Yes (Bearer)** |
 
-## Example request
+## Example request — signup
 
 ```bash
-curl -i -X POST http://localhost:3000/tasks -H "Content-Type: application/json" -d '{"title":"Buy milk"}'
+curl -i -X POST http://localhost:3000/auth/signup -H "Content-Type: application/json" -d '{"email":"test@example.com","password":"password123"}'
 ```
 
 Example response:
 
 HTTP/1.1 201 Created
-X-Powered-By: Express
 Content-Type: application/json; charset=utf-8
-Content-Length: 40
-ETag: W/"28-gPXr/tBcmKMXZwSEhav9o8e9gYc"
-Date: Fri, 31 Jul 2026 12:27:09 GMT
-Connection: keep-alive
-Keep-Alive: timeout=5
 
-{"id":5,"title":"Buy milk","done":false}
+{"id":"...","email":"test@example.com", ...}
 
 
-## Database
+## Example request — accessing a protected route
 
-Tasks are stored in PostgreSQL, running in its own Docker container (`db` service in `compose.yaml`),
-with a named volume (`taskdata`) so data survives a full `docker compose down` and `docker compose up`
-cycle.
+```bash
+curl -i http://localhost:3000/protected/profile -H "Authorization: Bearer <your_access_token>"
+```
 
-id |           title            | done
-----+----------------------------+------
-  1 | Buy milk                   | f
-  2 | Walk the dog                | t
-  3 | Finish CRUD API assignment | f
-  5 | Buy milk                   | f
-(4 rows)
+Without a token, or with a tampered token, this returns `401` instead.
 
+## Auth architecture
 
-![Postgres screenshot](postgres-screenshot.png)
-
-### Persistence proof
-
-Tested by creating a task, running `docker compose down` (stopping and removing both containers), then
-`docker compose up` again. The created task was still present in `GET /tasks` afterward — confirming the
-volume preserved the data even though the containers themselves were fully recreated.
-
-### Architecture note
-
-The service and route logic (`index.js`) did not change in shape when moving from SQLite to Postgres —
-only the database queries inside the routes changed (placeholder syntax `?` → `$1`, and the driver
-itself). This is the same principle proven across all three storage swaps in this project: the API is the
-promise, the database is just where that promise is kept.
+- Supabase acts as the Identity Provider — it stores accounts, hashes passwords, and issues JWTs. This app never
+  handles raw passwords or writes any cryptography itself.
+- `/protected/*` routes and `/auth/logout` are guarded by a single reusable Express middleware (`authMiddleware.js`)
+  that extracts the bearer token, verifies it with Supabase (`supabase.auth.getUser(token)`), and attaches the
+  verified user to the request — or rejects with `401` if the token is missing, malformed, or invalid.
+- Adding auth to a new route only requires passing `requireAuth` as middleware — no new verification code needed,
+  proven by `/protected/dashboard` reusing the exact same guard as `/protected/profile`.
 
 ## Swagger UI
 
-Interactive API docs available at `http://localhost:3000/docs` once the server is running.
+Interactive API docs available at `http://localhost:3000/docs`. Protected routes show a lock icon — click
+**Authorize**, paste an access token, and test protected endpoints directly from the browser.
 
-![Swagger UI screenshot](swagger-screenshot.png)
+![Swagger UI screenshot](swagger-auth-screenshot.png)
+
+## Database
+
+![Postgres screenshot](postgres-screenshot.png)
 
 ## Notes
 
-Running `docker compose down -v` (with the `-v` flag) removes the volume too, which would permanently
-delete all data — useful to know, and dangerous to do by accident.
+- Supabase's `anon` key is used here (safe for client/app use) — never the `service_role` key, which bypasses all
+  security and must stay server-side only.
+- Access tokens are short-lived (Supabase default: 1 hour); the login response also returns a refresh token for
+  obtaining a new access token without re-entering credentials.
