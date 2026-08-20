@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const cheerio = require("cheerio");
+const { z } = require("zod");
 
 const USER_AGENT = "FlyRankInternshipA9/1.0 (+https://github.com/HussainAli7858/crud-task-api)";
 const TIMEOUT_MS = 8000;
@@ -37,7 +38,8 @@ async function fetchWithCache(url, cacheFilename) {
     throw new Error(`Failed to fetch ${url}: status ${response.status}`);
   }
 
-  const html = await response.text();
+    const buffer = await response.arrayBuffer();
+    const html = new TextDecoder("utf-8").decode(buffer);
 
   fs.mkdirSync(path.dirname(cachePath), { recursive: true });
   fs.writeFileSync(cachePath, html, "utf-8");
@@ -77,7 +79,7 @@ async function discoverCataloguePages() {
 
 function urlToCacheFilename(url) {
   const segments = url.split("/").filter(Boolean);
-  const slug = segments[segments.length - 2]; 
+  const slug = segments[segments.length - 2];
   return `book-${slug}.html`;
 }
 
@@ -110,21 +112,76 @@ async function extractBookRecord(bookUrl, sourcePage) {
   };
 }
 
+// ---------- Stage 4: normalize + validate ----------
+
+function normalizeRecord(raw) {
+  // "£51.77" -> 51.77
+  const priceMatch = raw.price_text.match(/[\d.]+/);
+  const price_gbp = priceMatch ? parseFloat(priceMatch[0]) : NaN;
+
+  return {
+    ...raw,
+    price_gbp,
+  };
+}
+
+const BookSchema = z.object({
+  title: z.string().min(1),
+  product_url: z.string().url(),
+  price_text: z.string().min(1),
+  price_gbp: z.number().positive(),
+  availability_text: z.string().min(1),
+  rating_text: z.string().nullable(),
+  description: z.string().nullable(),
+  source_page: z.string().url(),
+  fetched_at: z.string(),
+});
+
 async function main() {
   const { bookUrls, pagesVisited, sourcePage } = await discoverCataloguePages();
   console.log(`catalogue_pages=${pagesVisited}`);
   console.log(`discovered=${bookUrls.length}`);
   console.log(`unique_urls=${bookUrls.length}`);
 
-  const records = [];
+  const validRecords = [];
+  const invalidRecords = [];
+  const seenUrls = new Set(); // canonical URL = identity, dedupe here too
+
   for (const url of bookUrls) {
-    const record = await extractBookRecord(url, sourcePage);
-    records.push(record);
+    const raw = await extractBookRecord(url, sourcePage);
+    const normalized = normalizeRecord(raw);
+
+    if (seenUrls.has(normalized.product_url)) {
+      continue; // already have this one — idempotent, don't duplicate
+    }
+
+    const result = BookSchema.safeParse(normalized);
+    if (result.success) {
+      validRecords.push(result.data);
+      seenUrls.add(normalized.product_url);
+    } else {
+      invalidRecords.push({ record: normalized, reason: result.error.message });
+    }
   }
 
-  console.log(`detail_pages=${records.length}`);
-  console.log("Sample record:");
-  console.log(JSON.stringify(records[0], null, 2));
+  console.log(`detail_pages=${bookUrls.length}`);
+  console.log(`valid_records=${validRecords.length}`);
+  console.log(`invalid_records=${invalidRecords.length}`);
+
+  const outputDir = path.join(__dirname, "..", "output");
+  fs.mkdirSync(outputDir, { recursive: true });
+
+  fs.writeFileSync(
+    path.join(outputDir, "books.json"),
+    JSON.stringify(validRecords, null, 2)
+  );
+
+  fs.writeFileSync(
+    path.join(outputDir, "errors.json"),
+    JSON.stringify(invalidRecords, null, 2)
+  );
+
+  console.log("Wrote output/books.json and output/errors.json");
 }
 
 main().catch((err) => {
