@@ -1,1 +1,9 @@
-[]
+{
+  "invalid_records": [],
+  "failed_pages": [
+    {
+      "url": "https://books.toscrape.com/catalogue/this-book-does-not-exist_9999/index.html",
+      "reason": "Fetch failed permanently: status 404"
+    }
+  ]
+}

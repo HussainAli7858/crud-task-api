@@ -21,33 +21,60 @@ async function fetchWithCache(url, cacheFilename) {
     return html;
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  let lastError;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
-  let response;
-  try {
-    response = await fetch(url, {
-      headers: { "User-Agent": USER_AGENT },
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timeout);
+    try {
+      const response = await fetch(url, {
+        headers: { "User-Agent": USER_AGENT },
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+
+      if (response.status === 404 || response.status === 403) {
+        // Don't retry — asking again won't help
+        throw new Error(`Fetch failed permanently: status ${response.status}`);
+      }
+
+      if (response.status >= 500 || response.status === 429) {
+        
+        if (attempt === 1) {
+          console.log(`WARN: ${cacheFilename} returned ${response.status}, retrying once...`);
+          await sleep(1000);
+          continue;
+        }
+        throw new Error(`Fetch failed after retry: status ${response.status}`);
+      }
+
+      if (response.status !== 200) {
+        throw new Error(`Unexpected status ${response.status}`);
+      }
+
+      const buffer = await response.arrayBuffer();
+      const html = new TextDecoder("utf-8").decode(buffer);
+
+      fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+      fs.writeFileSync(cachePath, html, "utf-8");
+
+      console.log(`FETCH: ${cacheFilename} (${html.length} bytes)`);
+      await sleep(DELAY_MS);
+
+      return html;
+    } catch (err) {
+      clearTimeout(timeout);
+      lastError = err;
+      if (attempt === 1 && (err.name === "AbortError")) {
+        console.log(`WARN: ${cacheFilename} timed out, retrying once...`);
+        await sleep(1000);
+        continue;
+      }
+      break;
+    }
   }
 
-  if (response.status !== 200) {
-    throw new Error(`Failed to fetch ${url}: status ${response.status}`);
-  }
-
-    const buffer = await response.arrayBuffer();
-    const html = new TextDecoder("utf-8").decode(buffer);
-
-  fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-  fs.writeFileSync(cachePath, html, "utf-8");
-
-  console.log(`FETCH: ${cacheFilename} (${html.length} bytes)`);
-  await sleep(DELAY_MS);
-
-  return html;
+  throw lastError;
 }
 
 async function discoverCataloguePages() {
@@ -112,10 +139,7 @@ async function extractBookRecord(bookUrl, sourcePage) {
   };
 }
 
-// ---------- Stage 4: normalize + validate ----------
-
 function normalizeRecord(raw) {
-  // "£51.77" -> 51.77
   const priceMatch = raw.price_text.match(/[\d.]+/);
   const price_gbp = priceMatch ? parseFloat(priceMatch[0]) : NaN;
 
@@ -138,21 +162,39 @@ const BookSchema = z.object({
 });
 
 async function main() {
+  const startTime = Date.now();
+  let cacheHits = 0;
+  let pagesFetched = 0;
+  let failedPages = 0;
+
   const { bookUrls, pagesVisited, sourcePage } = await discoverCataloguePages();
   console.log(`catalogue_pages=${pagesVisited}`);
   console.log(`discovered=${bookUrls.length}`);
   console.log(`unique_urls=${bookUrls.length}`);
 
+  // TEMPORARILY: line below is to test failure handling with a fake URL
+  // bookUrls.push("https://books.toscrape.com/catalogue/this-book-does-not-exist_9999/index.html");
+
   const validRecords = [];
   const invalidRecords = [];
-  const seenUrls = new Set(); // canonical URL = identity, dedupe here too
+  const failedUrls = [];
+  const seenUrls = new Set();
 
   for (const url of bookUrls) {
-    const raw = await extractBookRecord(url, sourcePage);
+    let raw;
+    try {
+      raw = await extractBookRecord(url, sourcePage);
+    } catch (err) {
+      console.log(`SKIPPED (failed page): ${url} — ${err.message}`);
+      failedPages++;
+      failedUrls.push({ url, reason: err.message });
+      continue;
+    }
+
     const normalized = normalizeRecord(raw);
 
     if (seenUrls.has(normalized.product_url)) {
-      continue; // already have this one — idempotent, don't duplicate
+      continue;
     }
 
     const result = BookSchema.safeParse(normalized);
@@ -164,9 +206,10 @@ async function main() {
     }
   }
 
-  console.log(`detail_pages=${bookUrls.length}`);
+  console.log(`detail_pages_attempted=${bookUrls.length}`);
   console.log(`valid_records=${validRecords.length}`);
   console.log(`invalid_records=${invalidRecords.length}`);
+  console.log(`failed_pages=${failedPages}`);
 
   const outputDir = path.join(__dirname, "..", "output");
   fs.mkdirSync(outputDir, { recursive: true });
@@ -178,13 +221,30 @@ async function main() {
 
   fs.writeFileSync(
     path.join(outputDir, "errors.json"),
-    JSON.stringify(invalidRecords, null, 2)
+    JSON.stringify({ invalid_records: invalidRecords, failed_pages: failedUrls }, null, 2)
   );
 
-  console.log("Wrote output/books.json and output/errors.json");
+  const durationMs = Date.now() - startTime;
+
+  const report = {
+    started_at: new Date(startTime).toISOString(),
+    duration_ms: durationMs,
+    catalogue_pages_visited: pagesVisited,
+    urls_discovered: bookUrls.length,
+    valid_records: validRecords.length,
+    invalid_records: invalidRecords.length,
+    failed_pages: failedPages,
+  };
+
+  fs.writeFileSync(
+    path.join(outputDir, "run-report.json"),
+    JSON.stringify(report, null, 2)
+  );
+
+  console.log("Wrote output/books.json, output/errors.json, output/run-report.json");
 }
 
 main().catch((err) => {
-  console.error("Error:", err.message);
+  console.error("Fatal error:", err.message);
   process.exit(1);
 });
